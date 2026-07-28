@@ -34,11 +34,9 @@ jobs:
           $appDir = "electron-app"
           New-Item -ItemType Directory -Force -Path $appDir
           
-          # Create main.js
           Set-Content -Path "$appDir/main.js" -Value "const { app, BrowserWindow } = require('electron'); function createWindow() { const win = new BrowserWindow({ width: 1280, height: 720 }); win.loadURL('file://' + __dirname + '/www/index.html'); } app.whenReady().then(createWindow);"
 
-          # Create standalone package.json for electron-builder with updated app name
-          Set-Content -Path "$appDir/package.json" -Value '{"name": "soe-multiplayer-windows", "version": "1.0.0", "main": "main.js"}'
+          Set-Content -Path "$appDir/package.json" -Value '{"name": "soe-multiplayer", "version": "1.0.0", "main": "main.js"}'
         shell: pwsh
 
       - name: Build Web Assets and Copy to Electron
@@ -79,7 +77,7 @@ jobs:
           if (-not $json.build) {
               $json | Add-Member -NotePropertyName "build" -NotePropertyValue (@{
                   appId = "com.soe.multiplayer"
-                  productName = "SoE Multiplayer Windows Desktop App"
+                  productName = "SoE Multiplayer"
                   directories = @{
                       app = "electron-app"
                   }
