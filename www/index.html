@@ -321,6 +321,77 @@
     padding: 4px 10px; font-size: 11px; color: #c0b090; pointer-events: none;
   }
 
+
+  /* Name tags */
+  .name-tag {
+    position: absolute; transform: translate(-50%, -100%);
+    background: rgba(10,8,5,0.82); border: 1px solid #8b7355; border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; color: #f0e6d0; white-space: nowrap;
+    pointer-events: none; z-index: 30; text-shadow: 0 1px 2px #000;
+  }
+  .name-tag .nt-hp {
+    display: block; height: 3px; background: #2a1f15; border-radius: 2px; margin-top: 3px; overflow: hidden;
+  }
+  .name-tag .nt-hp > i {
+    display: block; height: 100%; background: linear-gradient(90deg, #8b1a1a, #c43c3c); width: 100%;
+  }
+  #name-tags { position: absolute; inset: 0; pointer-events: none; z-index: 30; overflow: hidden; }
+
+  /* Improved chat */
+  #mp-chat {
+    position: absolute; bottom: 48px; left: 12px; width: min(320px, 46vw);
+    pointer-events: none; z-index: 55;
+  }
+  #mp-chat-log {
+    max-height: 130px; overflow-y: auto; font-size: 12px; color: #e0d5c0;
+    text-shadow: 0 1px 3px #000; margin-bottom: 4px;
+    background: rgba(12,8,5,0.55); border-radius: 8px; padding: 6px 8px;
+    pointer-events: auto;
+  }
+  #mp-chat-log div { margin-bottom: 3px; word-break: break-word; }
+  #mp-chat-log .sys { color: #a09070; font-style: italic; }
+  #mp-chat input {
+    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #6b5a40;
+    background: rgba(20,15,10,0.92); color: #e8e0d0; font-size: 13px;
+    pointer-events: auto; display: none;
+  }
+  #mp-chat input.show { display: block; }
+  #btn-chat-toggle {
+    display: none; margin-top: 4px; padding: 6px 12px; border-radius: 6px;
+    background: rgba(40,30,20,0.9); border: 1px solid #8b7355; color: #d4a84b;
+    font-size: 11px; cursor: pointer; pointer-events: auto;
+  }
+  #btn-chat-toggle.show { display: inline-block; }
+
+  /* Leave game */
+  #btn-leave-game {
+    display: none; position: absolute; top: 10px; right: 12px; z-index: 55;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer; pointer-events: auto;
+    background: rgba(60,25,25,0.92); border: 1px solid #a05050; color: #f0c0c0; font-size: 12px;
+  }
+  #btn-leave-game.show { display: block; }
+
+  /* Lobby privacy + browser */
+  .privacy-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 13px; color: #c8bba0; }
+  .privacy-row input { width: 18px; height: 18px; }
+  #lobby-browser {
+    max-height: 160px; overflow-y: auto; margin: 8px 0;
+    border: 1px solid #4a3a28; border-radius: 8px; background: rgba(20,15,10,0.5);
+  }
+  #lobby-browser .room-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid #3a2a1a; font-size: 12px; color: #e0d5c0;
+  }
+  #lobby-browser .room-row:last-child { border-bottom: none; }
+  #lobby-browser .room-row button {
+    padding: 6px 10px; border-radius: 6px; border: 1px solid #d4a84b;
+    background: rgba(80,60,30,0.9); color: #f0e6d0; cursor: pointer; font-size: 11px;
+  }
+  #lobby-browser .empty { padding: 12px; text-align: center; color: #8b7355; font-size: 12px; }
+  .badge-pub { color: #6a9a5a; font-size: 10px; letter-spacing: 1px; }
+  .badge-priv { color: #a09070; font-size: 10px; letter-spacing: 1px; }
+  .badge-cheat { color: #e08080; font-size: 10px; }
+
 </style>
 </head>
 <body>
@@ -341,10 +412,17 @@
     </div>
     <div class="lobby-btns">
       <button class="lobby-btn secondary" id="btn-solo">Solo Practice</button>
+      <button class="lobby-btn secondary" id="btn-browse-lobbies">Lobby Browser</button>
+    </div>
+    <div id="browser-panel" style="display:none;margin-top:10px">
+      <label>Public Lobbies</label>
+      <div id="lobby-browser"><div class="empty">Refreshing…</div></div>
+      <button class="lobby-btn secondary" id="btn-refresh-lobbies" style="width:100%;margin-top:6px">Refresh List</button>
     </div>
     <p style="font-size:11px;color:#8b7355;margin-top:10px;line-height:1.4;text-align:center">
-      Normal: earn XP · difficulty scales with party size<br>
-      Cheats: separate rooms · full cheats · <strong>no XP</strong>
+      New lobbies are <b>private</b> by default (code only).<br>
+      Host can make a lobby <b>public</b> so it appears in the browser.<br>
+      Normal: XP on · Cheats rooms: no XP
     </p>
     <div id="lobby-status"></div>
   </div>
@@ -358,6 +436,11 @@
       <input type="text" id="join-code-input" maxlength="8" placeholder="ABC123" style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px;" />
       <button class="lobby-btn" id="btn-connect-join">Connect</button>
     </div>
+    <div class="privacy-row" id="privacy-row" style="display:none">
+      <input type="checkbox" id="lobby-public-toggle" />
+      <label for="lobby-public-toggle" style="margin:0;text-transform:none;letter-spacing:0;font-size:13px;color:#c8bba0">Make lobby <b style="color:#6a9a5a">Public</b> (show in browser)</label>
+    </div>
+    <p id="privacy-hint" style="display:none;font-size:11px;color:#8b7355;margin:0 0 8px 0">Lobby starts <b>private</b>. Only players with the code can join until you make it public.</p>
     <div class="lobby-btns" id="lobby-host-actions">
       <button class="lobby-btn" id="btn-start-mp">Start Adventure</button>
       <button class="lobby-btn secondary" id="btn-leave-lobby">Leave</button>
@@ -427,7 +510,13 @@
     <button class="cbtn" data-cheat="noclip">Toggle No Clip</button>
     <button class="cbtn" data-cheat="day">Set Day / Night</button>
   </div>
-  <div id="mp-chat"><div id="mp-chat-log"></div><input id="mp-chat-input" maxlength="120" placeholder="Chat... (Enter)" /></div>
+  <div id="name-tags"></div>
+  <button id="btn-leave-game" type="button">Leave Game</button>
+  <div id="mp-chat">
+    <div id="mp-chat-log"></div>
+    <input id="mp-chat-input" maxlength="120" placeholder="Type message… Enter to send" autocomplete="off" />
+    <button id="btn-chat-toggle" type="button">Chat</button>
+  </div>
 
   <div id="crosshair"></div>
   <div id="damage-flash"></div>
@@ -503,13 +592,15 @@ const MP = {
   isHost: false,
   isCheatRoom: false,
   solo: false,
+  isPublic: false,
+  gameStartedNet: false,
   peer: null,
-  conn: null, // host: map id->conn; client: single conn
-  connections: {}, // host only
+  conn: null,
+  connections: {},
   localId: null,
   localName: 'Kael',
   roomCode: '',
-  players: {}, // id -> {name, x, z, yaw, hp, maxHp, weapon, alive, mesh, color}
+  players: {},
   partySize: 1,
   godMode: false,
   noClip: false,
@@ -518,7 +609,12 @@ const MP = {
   waveSpawned: 0,
   chatOpen: false,
   lastSync: 0,
-  colors: [0x3a5a7a, 0x5a3a6a, 0x3a6a4a, 0x6a4a3a, 0x4a5a6a, 0x6a3a4a]
+  dirPeer: null,
+  dirConn: null,
+  isDirectory: false,
+  publicRooms: {},
+  colors: [0x3a5a7a, 0x5a3a6a, 0x3a6a4a, 0x6a4a3a, 0x4a5a6a, 0x6a3a4a],
+  DIR_ID: 'eldoria-lobby-dir-v2'
 };
 
 function setLobbyStatus(msg, cls) {
@@ -560,7 +656,7 @@ function updateLobbyPlayerList() {
 function difficultyMult() {
   // Longer & harder with more players
   const n = MP.partySize || 1;
-  return 1 + (n - 1) * 0.45;
+  return 1 + (n - 1) * 0.28;
 }
 
 function applyPartyScaling() {
@@ -577,9 +673,9 @@ function applyPartyScaling() {
   if (boss) {
     if (!boss._baseHp) boss._baseHp = boss.maxHp;
     if (!boss._baseAtk) boss._baseAtk = boss.attack;
-    boss.maxHp = Math.floor(boss._baseHp * (1 + (n - 1) * 0.55));
+    boss.maxHp = Math.floor(boss._baseHp * (1 + (n - 1) * 0.22));
     boss.hp = boss.maxHp;
-    boss.attack = Math.floor(boss._baseAtk * (1 + (n - 1) * 0.3));
+    boss.attack = Math.floor(boss._baseAtk * (1 + (n - 1) * 0.12));
   }
   // Extra waves of goblins for larger parties
   MP.extraWaves = Math.max(0, n - 1);
@@ -623,17 +719,87 @@ function ensureRemoteMesh(id) {
   if (!p || id === MP.localId) return;
   if (!p.mesh && scene) {
     p.mesh = makeRemotePlayerMesh(p.color);
-    p.mesh.position.set(p.x || 0, 0, p.z || 0);
+    p.mesh.position.set(p.x || 0, p.inTower ? -55 : 0, p.z || 0);
     scene.add(p.mesh);
+    createNameTag(id, p.name);
   }
 }
 
+function createNameTag(id, name) {
+  const layer = document.getElementById('name-tags');
+  if (!layer) return null;
+  let el = document.getElementById('ntag-' + id);
+  if (el) return el;
+  el = document.createElement('div');
+  el.className = 'name-tag';
+  el.id = 'ntag-' + id;
+  el.innerHTML = '<span class="nt-name"></span><span class="nt-hp"><i></i></span>';
+  el.querySelector('.nt-name').textContent = name || 'Player';
+  layer.appendChild(el);
+  return el;
+}
+
+function removeNameTag(id) {
+  const el = document.getElementById('ntag-' + id);
+  if (el) el.remove();
+}
+
+function updateNameTags() {
+  if (!camera || !renderer || !gameStarted) return;
+  const w = renderer.domElement.clientWidth;
+  const h = renderer.domElement.clientHeight;
+  Object.keys(MP.players).forEach(id => {
+    if (id === MP.localId) return;
+    const p = MP.players[id];
+    if (!p || !p.mesh || !p.alive) {
+      const el = document.getElementById('ntag-' + id);
+      if (el) el.style.display = 'none';
+      return;
+    }
+    const el = createNameTag(id, p.name);
+    if (!el) return;
+    const pos = p.mesh.position.clone();
+    pos.y += 2.05;
+    pos.project(camera);
+    const x = (pos.x * 0.5 + 0.5) * w;
+    const y = (-pos.y * 0.5 + 0.5) * h;
+    if (pos.z > 1) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.querySelector('.nt-name').textContent = p.name || 'Player';
+    const hpPct = Math.max(0, Math.min(100, ((p.hp || 0) / (p.maxHp || 100)) * 100));
+    el.querySelector('.nt-hp > i').style.width = hpPct + '%';
+  });
+}
+
+function animateRemoteWalk(p, dt, moving) {
+  if (!p || !p.mesh || !p.mesh.userData) return;
+  const ud = p.mesh.userData;
+  if (moving) {
+    ud.walkPhase = (ud.walkPhase || 0) + dt * 9;
+    const s = Math.sin(ud.walkPhase);
+    if (ud.leftLeg) ud.leftLeg.rotation.x = s * 0.5;
+    if (ud.rightLeg) ud.rightLeg.rotation.x = -s * 0.5;
+    if (ud.leftArm) ud.leftArm.rotation.x = -s * 0.35;
+    if (ud.rightArm) ud.rightArm.rotation.x = s * 0.35;
+  } else {
+    if (ud.leftLeg) ud.leftLeg.rotation.x *= 0.8;
+    if (ud.rightLeg) ud.rightLeg.rotation.x *= 0.8;
+    if (ud.leftArm) ud.leftArm.rotation.x *= 0.8;
+    if (ud.rightArm) ud.rightArm.rotation.x *= 0.8;
+  }
+}
+
+
+
 function removeRemotePlayer(id) {
   const p = MP.players[id];
-  if (p && p.mesh) {
+  if (p && p.mesh && scene) {
     scene.remove(p.mesh);
     p.mesh = null;
   }
+  removeNameTag(id);
   delete MP.players[id];
   updateMpHud();
   updateLobbyPlayerList();
@@ -752,18 +918,24 @@ function handleNetMessage(fromId, msg) {
     }
     case 'state': {
       if (msg.id === MP.localId) break;
-      const p = MP.players[msg.id];
+      let p = MP.players[msg.id];
       if (!p) {
         MP.players[msg.id] = {
           name: msg.name || 'Hero', x: msg.x, z: msg.z, yaw: msg.yaw || 0,
           hp: msg.hp, maxHp: msg.maxHp || 100, weapon: msg.weapon, alive: msg.alive !== false,
-          color: msg.color || 0x3a5a7a
+          color: msg.color || 0x3a5a7a, inTower: !!msg.inTower, _lx: msg.x, _lz: msg.z, moving: false
         };
+        p = MP.players[msg.id];
       } else {
+        const dx = (msg.x - (p.x || 0));
+        const dz = (msg.z - (p.z || 0));
+        p.moving = (dx * dx + dz * dz) > 0.00005;
         p.x = msg.x; p.z = msg.z; p.yaw = msg.yaw; p.hp = msg.hp; p.maxHp = msg.maxHp;
         p.weapon = msg.weapon; p.alive = msg.alive !== false; p.name = msg.name || p.name;
+        p.inTower = !!msg.inTower;
       }
       ensureRemoteMesh(msg.id);
+      p = MP.players[msg.id];
       if (p && p.mesh) {
         p.mesh.position.x = msg.x;
         p.mesh.position.z = msg.z;
@@ -850,21 +1022,184 @@ function handleNetMessage(fromId, msg) {
       break;
     }
     case 'cheatSync': {
-      // Cosmetic notification
       addChat('System', msg.text || 'Cheat used');
+      break;
+    }
+    case 'hostLeft': {
+      addChat('System', 'Host left the game.');
+      setTimeout(() => location.reload(), 1200);
       break;
     }
   }
 }
 
+
+// ---- Public lobby directory (serverless via shared PeerJS peer) ----
+function roomAnnouncement() {
+  return {
+    type: 'announce',
+    code: MP.roomCode,
+    hostName: MP.localName,
+    players: Object.keys(MP.players).length,
+    max: 6,
+    cheat: !!MP.isCheatRoom,
+    public: !!MP.isPublic,
+    started: !!MP.gameStartedNet,
+    ts: Date.now()
+  };
+}
+
+function connectToDirectory(onReady) {
+  if (typeof Peer === 'undefined') { if (onReady) onReady(false); return; }
+  try {
+    const id = 'dir_' + Math.random().toString(36).slice(2, 10);
+    MP.dirPeer = new Peer(id, { debug: 0 });
+  } catch (e) { if (onReady) onReady(false); return; }
+  MP.dirPeer.on('open', () => {
+    const c = MP.dirPeer.connect(MP.DIR_ID, { reliable: true });
+    MP.dirConn = c;
+    let opened = false;
+    const timer = setTimeout(() => {
+      if (opened) return;
+      // Become directory if none exists
+      tryBecomeDirectory(onReady);
+    }, 2500);
+    c.on('open', () => {
+      opened = true;
+      clearTimeout(timer);
+      c.send(JSON.stringify({ type: 'list' }));
+      if (onReady) onReady(true);
+    });
+    c.on('data', raw => {
+      try {
+        const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (msg.type === 'roomList') {
+          MP.publicRooms = {};
+          (msg.rooms || []).forEach(r => { if (r && r.code) MP.publicRooms[r.code] = r; });
+          renderLobbyBrowser();
+        }
+      } catch (e) {}
+    });
+    c.on('error', () => {});
+  });
+  MP.dirPeer.on('error', err => {
+    if (err && (err.type === 'peer-unavailable' || String(err).includes('unavailable'))) {
+      tryBecomeDirectory(onReady);
+    }
+  });
+}
+
+function tryBecomeDirectory(onReady) {
+  if (MP.isDirectory) return;
+  try {
+    if (MP.dirPeer) { try { MP.dirPeer.destroy(); } catch (e) {} }
+    MP.dirPeer = new Peer(MP.DIR_ID, { debug: 0 });
+  } catch (e) { if (onReady) onReady(false); return; }
+  MP.dirPeer.on('open', () => {
+    MP.isDirectory = true;
+    MP.publicRooms = MP.publicRooms || {};
+    if (onReady) onReady(true);
+    renderLobbyBrowser();
+  });
+  MP.dirPeer.on('connection', conn => {
+    conn.on('data', raw => {
+      try {
+        const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (msg.type === 'list') {
+          const rooms = Object.values(MP.publicRooms).filter(r => r.public && !r.started && (Date.now() - (r.ts || 0) < 120000));
+          conn.send(JSON.stringify({ type: 'roomList', rooms }));
+        } else if (msg.type === 'announce') {
+          if (msg.public && msg.code && !msg.started) {
+            MP.publicRooms[msg.code] = msg;
+          } else if (msg.code) {
+            delete MP.publicRooms[msg.code];
+          }
+          // fan out updated list to this connection
+          const rooms = Object.values(MP.publicRooms).filter(r => r.public && !r.started);
+          conn.send(JSON.stringify({ type: 'roomList', rooms }));
+        } else if (msg.type === 'unannounce' && msg.code) {
+          delete MP.publicRooms[msg.code];
+        }
+      } catch (e) {}
+    });
+  });
+  MP.dirPeer.on('error', () => { if (onReady) onReady(false); });
+}
+
+function announceToDirectory() {
+  if (!MP.isHost || MP.solo) return;
+  const payload = roomAnnouncement();
+  if (MP.isDirectory) {
+    if (payload.public && !payload.started) MP.publicRooms[payload.code] = payload;
+    else delete MP.publicRooms[payload.code];
+    renderLobbyBrowser();
+    return;
+  }
+  if (MP.dirConn && MP.dirConn.open) {
+    try { MP.dirConn.send(JSON.stringify(payload)); } catch (e) {}
+  } else {
+    connectToDirectory(() => {
+      if (MP.dirConn && MP.dirConn.open) {
+        try { MP.dirConn.send(JSON.stringify(payload)); } catch (e) {}
+      }
+    });
+  }
+}
+
+function renderLobbyBrowser() {
+  const box = document.getElementById('lobby-browser');
+  if (!box) return;
+  const rooms = Object.values(MP.publicRooms || {}).filter(r => r.public && !r.started);
+  if (!rooms.length) {
+    box.innerHTML = '<div class="empty">No public lobbies right now. Host one and enable Public.</div>';
+    return;
+  }
+  box.innerHTML = rooms.map(r => {
+    const tag = r.cheat ? '<span class="badge-cheat">CHEATS</span>' : '<span class="badge-pub">NORMAL</span>';
+    return '<div class="room-row"><div><b>' + (r.hostName || 'Host') + '</b> · ' + (r.players || 1) + ' players<br/>' + tag + ' · code <code>' + r.code + '</code></div><button data-join="' + r.code + '" data-cheat="' + (r.cheat ? '1' : '0') + '">Join</button></div>';
+  }).join('');
+  box.querySelectorAll('button[data-join]').forEach(btn => {
+    btn.onclick = () => {
+      const code = btn.getAttribute('data-join');
+      const cheat = btn.getAttribute('data-cheat') === '1';
+      const nameInput = document.getElementById('player-name-input');
+      MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
+      setupPeerClient(code, cheat);
+    };
+  });
+}
+
+function leaveMultiplayerGame() {
+  try {
+    if (MP.isHost) {
+      MP.isPublic = false;
+      MP.gameStartedNet = false;
+      announceToDirectory();
+      broadcast({ type: 'hostLeft' });
+    } else {
+      broadcast({ type: 'playerLeft', id: MP.localId, name: MP.localName });
+    }
+  } catch (e) {}
+  try { if (MP.peer) MP.peer.destroy(); } catch (e) {}
+  try { if (MP.dirPeer) MP.dirPeer.destroy(); } catch (e) {}
+  location.reload();
+}
+
+
 function addChat(name, text) {
   const log = document.getElementById('mp-chat-log');
   if (!log) return;
   const d = document.createElement('div');
-  d.innerHTML = '<b style="color:#d4a84b">' + name + ':</b> ' + text.replace(/[<>]/g, '');
+  const safe = String(text || '').replace(/[<>]/g, '');
+  if (name === 'System') {
+    d.className = 'sys';
+    d.textContent = safe;
+  } else {
+    d.innerHTML = '<b style="color:#d4a84b">' + String(name).replace(/[<>]/g, '') + ':</b> ' + safe;
+  }
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
-  while (log.children.length > 30) log.removeChild(log.firstChild);
+  while (log.children.length > 40) log.removeChild(log.firstChild);
 }
 
 function setupPeerHost(isCheat) {
@@ -880,14 +1215,22 @@ function setupPeerHost(isCheat) {
     weapon: 1, alive: true, color: MP.colors[0], isHost: true
   };
 
+  MP.isPublic = false;
+  MP.gameStartedNet = false;
   document.getElementById('lobby-menu').style.display = 'none';
   document.getElementById('lobby-room').style.display = 'block';
   document.getElementById('room-code-display').textContent = MP.roomCode;
   document.getElementById('lobby-join-row').style.display = 'none';
   document.getElementById('lobby-host-actions').style.display = 'flex';
   document.getElementById('lobby-client-actions').style.display = 'none';
+  const prow = document.getElementById('privacy-row');
+  const phint = document.getElementById('privacy-hint');
+  if (prow) prow.style.display = 'flex';
+  if (phint) phint.style.display = 'block';
+  const ptoggle = document.getElementById('lobby-public-toggle');
+  if (ptoggle) ptoggle.checked = false;
   updateLobbyPlayerList();
-  setLobbyStatus('Creating room...', '');
+  setLobbyStatus('Creating private room...', '');
 
   try {
     MP.peer = new Peer(MP.roomCode, { debug: 1 });
@@ -896,9 +1239,10 @@ function setupPeerHost(isCheat) {
     return;
   }
   MP.peer.on('open', id => {
-    setLobbyStatus('Room ready — share code ' + id, 'ok');
+    setLobbyStatus('Private room ready — share code ' + id + ' (not listed until Public)', 'ok');
     document.getElementById('room-code-display').textContent = id;
     MP.roomCode = id;
+    connectToDirectory(() => announceToDirectory());
   });
   MP.peer.on('connection', conn => {
     const cid = conn.peer;
@@ -969,7 +1313,6 @@ function setupPeerClient(code, isCheat) {
 function beginMultiplayerGame() {
   document.getElementById('lobby-screen').classList.remove('visible');
   document.getElementById('lobby-screen').style.display = 'none';
-  // Assign netIds to enemies
   enemies.forEach((en, i) => { en.netId = en.netId || ('gob' + i); });
   if (boss) boss.netId = 'boss';
   applyPartyScaling();
@@ -977,14 +1320,21 @@ function beginMultiplayerGame() {
     document.getElementById('cheat-banner').classList.add('show');
   }
   Object.keys(MP.players).forEach(id => ensureRemoteMesh(id));
-  startGame(false); // PC
+  startGame(false);
   updateMpHud();
-  addChat('System', MP.isCheatRoom ? 'Cheats room — XP disabled' : 'Party of ' + MP.partySize + ' — good luck!');
+  const leaveBtn = document.getElementById('btn-leave-game');
+  if (leaveBtn) leaveBtn.classList.add('show');
+  const chatToggle = document.getElementById('btn-chat-toggle');
+  if (chatToggle) chatToggle.classList.add('show');
+  addChat('System', MP.isCheatRoom ? 'Cheats room — XP disabled. Press Enter / Chat to talk.' : 'Party of ' + MP.partySize + ' — good luck! Chat with Enter.');
 }
 
 function hostStartGame() {
   if (!MP.isHost) return;
   MP.partySize = Object.keys(MP.players).length;
+  MP.gameStartedNet = true;
+  MP.isPublic = false; // remove from browser once started
+  announceToDirectory();
   broadcast({ type: 'startGame', partySize: MP.partySize, isCheat: MP.isCheatRoom });
   beginMultiplayerGame();
 }
@@ -1021,6 +1371,13 @@ function mpSyncTick() {
     });
     broadcast({ type: 'enemySync', enemies: elist });
   }
+  // Remote walk animations
+  Object.keys(MP.players).forEach(id => {
+    if (id === MP.localId) return;
+    const p = MP.players[id];
+    if (p) animateRemoteWalk(p, 0.05, !!p.moving);
+  });
+  updateNameTags();
   updateMpHud();
 }
 
@@ -1166,6 +1523,72 @@ function initLobbyUI() {
   const leave = () => location.reload();
   document.getElementById('btn-leave-lobby').onclick = leave;
   document.getElementById('btn-leave-lobby2').onclick = leave;
+  const leaveGameBtn = document.getElementById('btn-leave-game');
+  if (leaveGameBtn) leaveGameBtn.onclick = () => leaveMultiplayerGame();
+
+  const pubToggle = document.getElementById('lobby-public-toggle');
+  if (pubToggle) {
+    pubToggle.onchange = () => {
+      if (!MP.isHost) return;
+      MP.isPublic = !!pubToggle.checked;
+      setLobbyStatus(MP.isPublic ? 'Lobby is PUBLIC — listed in browser' : 'Lobby is PRIVATE — code only', MP.isPublic ? 'ok' : '');
+      announceToDirectory();
+    };
+  }
+  const browseBtn = document.getElementById('btn-browse-lobbies');
+  const browserPanel = document.getElementById('browser-panel');
+  if (browseBtn && browserPanel) {
+    browseBtn.onclick = () => {
+      browserPanel.style.display = browserPanel.style.display === 'none' ? 'block' : 'none';
+      if (browserPanel.style.display === 'block') {
+        connectToDirectory(() => {
+          if (MP.dirConn && MP.dirConn.open) MP.dirConn.send(JSON.stringify({ type: 'list' }));
+          renderLobbyBrowser();
+        });
+      }
+    };
+  }
+  const refreshBtn = document.getElementById('btn-refresh-lobbies');
+  if (refreshBtn) {
+    refreshBtn.onclick = () => {
+      connectToDirectory(() => {
+        if (MP.dirConn && MP.dirConn.open) MP.dirConn.send(JSON.stringify({ type: 'list' }));
+        if (MP.isDirectory) renderLobbyBrowser();
+      });
+      setLobbyStatus('Refreshing public lobbies…', '');
+    };
+  }
+  const chatToggle = document.getElementById('btn-chat-toggle');
+  const chatInp = document.getElementById('mp-chat-input');
+  if (chatToggle && chatInp) {
+    chatToggle.onclick = () => {
+      MP.chatOpen = !MP.chatOpen;
+      if (MP.chatOpen) {
+        chatInp.classList.add('show');
+        chatInp.focus();
+        if (!isMobile) document.exitPointerLock();
+      } else {
+        chatInp.classList.remove('show');
+      }
+    };
+    chatInp.addEventListener('keydown', e => {
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = chatInp.value.trim();
+        if (text) {
+          addChat(MP.localName, text);
+          broadcast({ type: 'chat', name: MP.localName, text });
+          chatInp.value = '';
+        }
+      }
+      if (e.code === 'Escape') {
+        chatInp.classList.remove('show');
+        MP.chatOpen = false;
+        if (!isMobile) renderer.domElement.requestPointerLock();
+      }
+    });
+  }
 
   document.querySelectorAll('#cheat-panel .cbtn').forEach(btn => {
     btn.onclick = () => runCheat(btn.dataset.cheat);
@@ -1179,18 +1602,19 @@ function initLobbyUI() {
         document.getElementById('cheat-panel').classList.toggle('visible');
       }
     }
+    if (e.code === 'Enter' && e.target && e.target.id === 'mp-chat-input') return;
     if (e.code === 'Enter') {
       const inp = document.getElementById('mp-chat-input');
+      if (!inp) return;
       if (MP.chatOpen) {
-        const t = inp.value.trim();
-        if (t) {
-          addChat(MP.localName, t);
-          broadcast({ type: 'chat', name: MP.localName, text: t });
+        const text = inp.value.trim();
+        if (text) {
+          addChat(MP.localName, text);
+          broadcast({ type: 'chat', name: MP.localName, text });
         }
         inp.value = '';
-        inp.classList.remove('show');
-        MP.chatOpen = false;
-        if (!isMobile) renderer.domElement.requestPointerLock();
+        // keep chat open so you can keep talking
+        inp.focus();
       } else if (!inDialogue && !inventoryOpen) {
         e.preventDefault();
         MP.chatOpen = true;
@@ -1198,6 +1622,12 @@ function initLobbyUI() {
         inp.focus();
         document.exitPointerLock();
       }
+    }
+    if (e.code === 'Escape' && MP.chatOpen) {
+      const inp = document.getElementById('mp-chat-input');
+      if (inp) inp.classList.remove('show');
+      MP.chatOpen = false;
+      if (!isMobile) renderer.domElement.requestPointerLock();
     }
   });
 }
@@ -2703,9 +3133,9 @@ function enterTowerInterior() {
     scene.add(mal);
     boss = {
       mesh: mal,
-      hp: 200,
-      maxHp: 200,
-      attack: 15,
+      hp: 180,
+      maxHp: 180,
+      attack: 12,
       alive: true,
       radius: 2.6,
       attackCooldown: 0,
@@ -2717,11 +3147,11 @@ function enterTowerInterior() {
     // Scale boss with party size
     if (typeof applyPartyScaling === 'function') {
       const n = MP.partySize || 1;
-      boss._baseHp = 200;
-      boss._baseAtk = 15;
-      boss.maxHp = Math.floor(200 * (1 + (n - 1) * 0.55));
+      boss._baseHp = 180;
+      boss._baseAtk = 12;
+      boss.maxHp = Math.floor(180 * (1 + (n - 1) * 0.22));
       boss.hp = boss.maxHp;
-      boss.attack = Math.floor(15 * (1 + (n - 1) * 0.3));
+      boss.attack = Math.floor(12 * (1 + (n - 1) * 0.12));
     }
 
     // Hint plaque — riddle, not direct order
