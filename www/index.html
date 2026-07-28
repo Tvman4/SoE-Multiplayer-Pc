@@ -392,11 +392,57 @@
   .badge-priv { color: #a09070; font-size: 10px; letter-spacing: 1px; }
   .badge-cheat { color: #e08080; font-size: 10px; }
 
+
+  #account-screen {
+    position: absolute; inset: 0; z-index: 120; pointer-events: auto;
+    background: radial-gradient(ellipse at center, #2a2015 0%, #0a0805 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 16px; overflow-y: auto;
+  }
+  #account-screen.hidden { display: none !important; }
+  #account-screen h1 { font-size: clamp(22px, 5vw, 36px); color: #d4a84b; font-weight: 300; letter-spacing: 2px; margin-bottom: 4px; }
+  #account-screen .sub { color: #8b7355; font-size: 12px; letter-spacing: 1px; margin-bottom: 16px; }
+  #account-card {
+    background: rgba(18,12,8,0.95); border: 1px solid #8b7355; border-radius: 12px;
+    padding: 18px; width: min(400px, 94vw);
+  }
+  #account-card label { display: block; font-size: 11px; color: #a09070; letter-spacing: 1px; margin-bottom: 4px; text-transform: uppercase; }
+  #account-card input {
+    width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #6b5a40;
+    background: rgba(40,30,20,0.8); color: #f0e6d0; font-size: 15px; margin-bottom: 12px;
+  }
+  #account-status { font-size: 12px; color: #c8bba0; min-height: 18px; margin-top: 8px; text-align: center; }
+  #account-status.error { color: #e08070; }
+  #account-status.ok { color: #6a9a5a; }
+
 </style>
 </head>
 <body>
 
-<div id="lobby-screen" class="visible">
+
+<div id="account-screen">
+  <h1>SHADOWS OF ELDORIA</h1>
+  <div class="sub">ACCOUNT REQUIRED</div>
+  <div id="account-card">
+    <label>Username</label>
+    <input type="text" id="acc-username" maxlength="20" autocomplete="username" placeholder="3–20 letters or numbers" />
+    <label>Password</label>
+    <input type="password" id="acc-password" maxlength="100" autocomplete="current-password" placeholder="6+ characters" />
+    <label>Confirm Password <span style="color:#6b5a40;text-transform:none">(create only)</span></label>
+    <input type="password" id="acc-password2" maxlength="100" autocomplete="new-password" placeholder="Repeat password" />
+    <div class="lobby-btns">
+      <button class="lobby-btn" type="button" id="btn-acc-login">Log In</button>
+      <button class="lobby-btn secondary" type="button" id="btn-acc-register">Create Account</button>
+    </div>
+    <div id="account-status"></div>
+    <p style="font-size:11px;color:#8b7355;margin-top:12px;line-height:1.4;text-align:center">
+      An account is required to play multiplayer.<br>
+      Accounts are stored securely in the cloud.
+    </p>
+  </div>
+</div>
+
+<div id="lobby-screen" class="visible" style="display:none">
   <h1>SHADOWS OF ELDORIA</h1>
   <div class="sub">MULTIPLAYER · PC</div>
   <div class="lobby-card" id="lobby-menu">
@@ -420,7 +466,7 @@
       <button class="lobby-btn secondary" id="btn-refresh-lobbies" style="width:100%;margin-top:6px">Refresh List</button>
     </div>
     <p style="font-size:11px;color:#8b7355;margin-top:10px;line-height:1.4;text-align:center">
-      PlayFab Title <b>1AE41B</b> · Photon Realtime linked<br>New lobbies are <b>private</b> by default (code only).<br>
+      Cloud accounts required · New lobbies are <b>private</b> by default (code only).<br>
       Host can make a lobby <b>public</b> so it appears in the browser.<br>
       Normal: XP on · Cheats rooms: no XP
     </p>
@@ -814,6 +860,161 @@ function renderPhotonLobbyBrowser() {
     };
   });
 }
+
+
+function setAccountStatus(msg, cls) {
+  const el = document.getElementById("account-status");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = cls || "";
+}
+
+function showAccountScreen(show) {
+  const a = document.getElementById("account-screen");
+  const lob = document.getElementById("lobby-screen");
+  if (!a) return;
+  if (show) {
+    a.classList.remove("hidden");
+    if (lob) { lob.classList.remove("visible"); lob.style.display = "none"; }
+  } else {
+    a.classList.add("hidden");
+    if (lob) {
+      lob.style.display = "flex";
+      lob.classList.add("visible");
+    }
+  }
+}
+
+function fetchPhotonToken() {
+  return new Promise((resolve) => {
+    if (typeof PlayFab === "undefined" || !PlayFab.ClientApi || !BACKEND.playFabLoggedIn) return resolve(null);
+    PlayFab.ClientApi.GetPhotonAuthenticationToken({
+      PhotonApplicationId: BACKEND.photonRealtimeAppId
+    }, (pres, perr) => {
+      if (!perr && pres && pres.data) {
+        BACKEND.photonToken = pres.data.PhotonCustomAuthenticationToken;
+      }
+      resolve(BACKEND.photonToken);
+    });
+  });
+}
+
+function playFabRegister(username, password, displayName) {
+  return new Promise((resolve, reject) => {
+    if (typeof PlayFab === "undefined" || !PlayFab.ClientApi) {
+      reject({ errorMessage: "Cloud service unavailable. Check your connection." });
+      return;
+    }
+    PlayFab.settings.titleId = BACKEND.playFabTitleId;
+    PlayFab.ClientApi.RegisterPlayFabUser({
+      TitleId: BACKEND.playFabTitleId,
+      Username: username,
+      Password: password,
+      DisplayName: (displayName || username).slice(0, 25),
+      RequireBothUsernameAndEmail: false
+    }, (result, error) => {
+      if (error) return reject(error);
+      BACKEND.playFabLoggedIn = true;
+      BACKEND.playFabId = result.data.PlayFabId;
+      BACKEND.sessionTicket = result.data.SessionTicket;
+      localStorage.setItem("eldoria_user", username);
+      fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
+    });
+  });
+}
+
+function playFabLoginUsername(username, password) {
+  return new Promise((resolve, reject) => {
+    if (typeof PlayFab === "undefined" || !PlayFab.ClientApi) {
+      reject({ errorMessage: "Cloud service unavailable. Check your connection." });
+      return;
+    }
+    PlayFab.settings.titleId = BACKEND.playFabTitleId;
+    PlayFab.ClientApi.LoginWithPlayFab({
+      TitleId: BACKEND.playFabTitleId,
+      Username: username,
+      Password: password
+    }, (result, error) => {
+      if (error) return reject(error);
+      BACKEND.playFabLoggedIn = true;
+      BACKEND.playFabId = result.data.PlayFabId;
+      BACKEND.sessionTicket = result.data.SessionTicket;
+      localStorage.setItem("eldoria_user", username);
+      fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
+    });
+  });
+}
+
+function pfErr(error) {
+  if (!error) return "Unknown error";
+  if (error.errorMessage) return error.errorMessage;
+  if (error.error) return String(error.error);
+  try { return JSON.stringify(error); } catch (e) { return "Request failed"; }
+}
+
+function initAccountUI() {
+  const loginBtn = document.getElementById("btn-acc-login");
+  const regBtn = document.getElementById("btn-acc-register");
+  if (!loginBtn || !regBtn) return;
+  showAccountScreen(true);
+  const saved = localStorage.getItem("eldoria_user");
+  if (saved) {
+    const u = document.getElementById("acc-username");
+    if (u) u.value = saved;
+  }
+  loginBtn.onclick = () => {
+    const username = (document.getElementById("acc-username").value || "").trim();
+    const password = document.getElementById("acc-password").value || "";
+    if (username.length < 3 || username.length > 20) {
+      setAccountStatus("Username must be 3–20 characters", "error");
+      return;
+    }
+    if (password.length < 6) {
+      setAccountStatus("Password must be at least 6 characters", "error");
+      return;
+    }
+    setAccountStatus("Logging in…", "");
+    loginBtn.disabled = true;
+    playFabLoginUsername(username, password).then(() => {
+      MP.localName = username;
+      const nameInput = document.getElementById("player-name-input");
+      if (nameInput) nameInput.value = username;
+      setAccountStatus("Welcome back, " + username, "ok");
+      setTimeout(() => showAccountScreen(false), 400);
+    }).catch(err => {
+      setAccountStatus(pfErr(err), "error");
+    }).finally(() => { loginBtn.disabled = false; });
+  };
+  regBtn.onclick = () => {
+    const username = (document.getElementById("acc-username").value || "").trim();
+    const password = document.getElementById("acc-password").value || "";
+    const password2 = document.getElementById("acc-password2").value || "";
+    if (!/^[a-zA-Z0-9_]+$/.test(username) || username.length < 3 || username.length > 20) {
+      setAccountStatus("Username: 3–20 letters, numbers, underscore", "error");
+      return;
+    }
+    if (password.length < 6) {
+      setAccountStatus("Password must be at least 6 characters", "error");
+      return;
+    }
+    if (password !== password2) {
+      setAccountStatus("Passwords do not match", "error");
+      return;
+    }
+    setAccountStatus("Creating account…", "");
+    regBtn.disabled = true;
+    playFabRegister(username, password, username).then(() => {
+      MP.localName = username;
+      const nameInput = document.getElementById("player-name-input");
+      if (nameInput) nameInput.value = username;
+      setAccountStatus("Account created. Welcome, " + username, "ok");
+      setTimeout(() => showAccountScreen(false), 500);
+    }).catch(err => {
+      setAccountStatus(pfErr(err), "error");
+    }).finally(() => { regBtn.disabled = false; });
+  };
+}
+
 
 function setLobbyStatus(msg, cls) {
   const el = document.getElementById('lobby-status');
@@ -1440,16 +1641,15 @@ function setupPeerHost(isCheat) {
   MP.solo = false;
   MP.roomCode = genRoomCode();
   // PlayFab login (async) then continue host setup
-  setLobbyStatus("Signing in to PlayFab...", "");
-  playFabLogin(MP.localName).then(() => {
-    setLobbyStatus(BACKEND.playFabLoggedIn ? "PlayFab OK · setting up room..." : "PlayFab offline · PeerJS room...", BACKEND.playFabLoggedIn ? "ok" : "");
-    if (BACKEND.preferPhoton && BACKEND.photonToken) initPhotonIfAvailable();
-    if (BACKEND.photonClient && BACKEND.preferPhoton) {
-      photonCreateRoom(MP.roomCode, isCheat, false);
-    }
-  }).catch(e => {
-    setLobbyStatus("PlayFab login failed — using PeerJS only", "error");
-  });
+  setLobbyStatus(BACKEND.playFabLoggedIn ? "Account verified · setting up room..." : "Connecting…", BACKEND.playFabLoggedIn ? "ok" : "");
+  if (BACKEND.playFabLoggedIn) {
+    fetchPhotonToken().then(() => {
+      if (BACKEND.preferPhoton && BACKEND.photonToken) initPhotonIfAvailable();
+      if (BACKEND.photonClient && BACKEND.preferPhoton) {
+        photonCreateRoom(MP.roomCode, isCheat, false);
+      }
+    });
+  }
 
   MP.localId = 'host_' + MP.roomCode;
   MP.players = {};
@@ -1514,14 +1714,16 @@ function setupPeerClient(code, isCheat) {
   MP.enabled = true;
   MP.solo = false;
   MP.roomCode = code.toUpperCase().trim();
-  setLobbyStatus("Signing in to PlayFab...", "");
-  playFabLogin(MP.localName).then(() => {
-    if (BACKEND.preferPhoton && BACKEND.photonToken) initPhotonIfAvailable();
-    if (BACKEND.photonClient && BACKEND.preferPhoton) {
-      photonJoinRoom(MP.roomCode);
-      setLobbyStatus("Joining Photon room " + MP.roomCode + "...", "");
-    }
-  }).catch(() => {});
+  setLobbyStatus(BACKEND.playFabLoggedIn ? "Account verified · joining..." : "Connecting…", "");
+  if (BACKEND.playFabLoggedIn) {
+    fetchPhotonToken().then(() => {
+      if (BACKEND.preferPhoton && BACKEND.photonToken) initPhotonIfAvailable();
+      if (BACKEND.photonClient && BACKEND.preferPhoton) {
+        photonJoinRoom(MP.roomCode);
+        setLobbyStatus("Joining room " + MP.roomCode + "...", "");
+      }
+    });
+  }
 
   MP.localId = 'p_' + Math.random().toString(36).slice(2, 9);
   MP.players = {};
@@ -1766,14 +1968,17 @@ function runCheat(cmd) {
 function initLobbyUI() {
   const nameInput = document.getElementById('player-name-input');
   document.getElementById('btn-host-normal').onclick = () => {
+    if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     setupPeerHost(false);
   };
   document.getElementById('btn-host-cheat').onclick = () => {
+    if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     setupPeerHost(true);
   };
   document.getElementById('btn-join-normal').onclick = () => {
+    if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     MP.isCheatRoom = false;
     document.getElementById('lobby-menu').style.display = 'none';
@@ -1785,6 +1990,7 @@ function initLobbyUI() {
     document.getElementById('join-code-input').dataset.cheat = '0';
   };
   document.getElementById('btn-join-cheat').onclick = () => {
+    if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     MP.isCheatRoom = true;
     document.getElementById('lobby-menu').style.display = 'none';
@@ -1802,6 +2008,7 @@ function initLobbyUI() {
     setupPeerClient(code, cheat);
   };
   document.getElementById('btn-solo').onclick = () => {
+    if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     MP.enabled = true;
     MP.solo = true;
