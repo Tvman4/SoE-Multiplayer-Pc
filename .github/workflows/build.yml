@@ -85,7 +85,6 @@ jobs:
                   }
                   win = @{
                       icon = "icon.ico"
-                      artifactName = "SoE-Multiplayer-Windows-Setup-\${version}.\${ext}"
                   }
                   nsis = @{
                       oneClick = $false
