@@ -460,6 +460,9 @@
       <button class="lobby-btn secondary" id="btn-solo">Solo Practice</button>
       <button class="lobby-btn secondary" id="btn-browse-lobbies">Lobby Browser</button>
     </div>
+    <div class="lobby-btns">
+      <button class="lobby-btn secondary" type="button" id="btn-enable-mic">Enable Mic</button>
+    </div>
     <div id="browser-panel" style="display:none;margin-top:10px">
       <label>Public Lobbies</label>
       <div id="lobby-browser"><div class="empty">Refreshing…</div></div>
@@ -561,6 +564,7 @@
   </div>
   <div id="name-tags"></div>
   <button id="btn-leave-game" type="button">Leave Game</button>
+  <button id="btn-mic-game" type="button" style="display:none;position:absolute;top:10px;right:110px;z-index:55;padding:8px 12px;border-radius:8px;cursor:pointer;pointer-events:auto;background:rgba(30,40,60,0.92);border:1px solid #6a8ab0;color:#c0d0f0;font-size:12px">Mic</button>
   <div id="mp-chat">
     <div id="mp-chat-log"></div>
     <input id="mp-chat-input" maxlength="120" placeholder="Type message… Enter to send" autocomplete="off" />
@@ -918,6 +922,7 @@ function playFabRegister(username, password, displayName) {
       BACKEND.playFabId = result.data.PlayFabId;
       BACKEND.sessionTicket = result.data.SessionTicket;
       localStorage.setItem("eldoria_user", username);
+      try { linkDeviceForAutoLogin(); } catch (e) {}
       fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
     });
   });
@@ -940,6 +945,7 @@ function playFabLoginUsername(username, password) {
       BACKEND.playFabId = result.data.PlayFabId;
       BACKEND.sessionTicket = result.data.SessionTicket;
       localStorage.setItem("eldoria_user", username);
+      try { linkDeviceForAutoLogin(); } catch (e) {}
       fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
     });
   });
@@ -962,6 +968,21 @@ function initAccountUI() {
     const u = document.getElementById("acc-username");
     if (u) u.value = saved;
   }
+  setAccountStatus("Checking saved login…", "");
+  tryAutoLogin().then(function(ok) {
+    if (ok) {
+      acServerCheckBanOnLogin().then(function(allowed) {
+        if (!allowed) {
+          setAccountStatus("Account restricted by server anti-cheat", "error");
+          return;
+        }
+        setAccountStatus("Welcome back, " + (MP.localName || "player"), "ok");
+        setTimeout(function() { showAccountScreen(false); }, 300);
+      });
+    } else {
+      setAccountStatus("", "");
+    }
+  });
   loginBtn.onclick = () => {
     const username = (document.getElementById("acc-username").value || "").trim();
     const password = document.getElementById("acc-password").value || "";
@@ -979,7 +1000,13 @@ function initAccountUI() {
       MP.localName = username;
       const nameInput = document.getElementById("player-name-input");
       if (nameInput) nameInput.value = username;
-      setAccountStatus("Welcome back, " + username, "ok");
+      return acServerCheckBanOnLogin();
+    }).then((allowed) => {
+      if (allowed === false) {
+        setAccountStatus("Account restricted by server anti-cheat", "error");
+        return;
+      }
+      setAccountStatus("Welcome back, " + (MP.localName || username), "ok");
       setTimeout(() => showAccountScreen(false), 400);
     }).catch(err => {
       setAccountStatus(pfErr(err), "error");
@@ -1007,7 +1034,13 @@ function initAccountUI() {
       MP.localName = username;
       const nameInput = document.getElementById("player-name-input");
       if (nameInput) nameInput.value = username;
-      setAccountStatus("Account created. Welcome, " + username, "ok");
+      return acServerCheckBanOnLogin();
+    }).then((allowed) => {
+      if (allowed === false) {
+        setAccountStatus("Account restricted by server anti-cheat", "error");
+        return;
+      }
+      setAccountStatus("Account created. Welcome, " + (MP.localName || username), "ok");
       setTimeout(() => showAccountScreen(false), 500);
     }).catch(err => {
       setAccountStatus(pfErr(err), "error");
@@ -1446,6 +1479,13 @@ function handleNetMessage(fromId, msg) {
       addChat('System', msg.text || 'Cheat used');
       break;
     }
+    case 'acKick': {
+      if (msg.id && msg.id !== MP.localId) {
+        addChat('System', (msg.name || 'Player') + ' was kicked by anti-cheat (' + (msg.reason || 'violation') + ')');
+        removeRemotePlayer(msg.id);
+      }
+      break;
+    }
     case 'hostLeft': {
       addChat('System', 'Host left the game.');
       setTimeout(() => location.reload(), 1200);
@@ -1765,6 +1805,7 @@ function setupPeerClient(code, isCheat) {
 }
 
 function beginMultiplayerGame() {
+  if (!MP.isCheatRoom && !MP.solo && typeof acIntegrityGate === 'function' && !acIntegrityGate()) return;
   document.getElementById('lobby-screen').classList.remove('visible');
   document.getElementById('lobby-screen').style.display = 'none';
   enemies.forEach((en, i) => { en.netId = en.netId || ('gob' + i); });
@@ -1778,6 +1819,11 @@ function beginMultiplayerGame() {
   updateMpHud();
   const leaveBtn = document.getElementById('btn-leave-game');
   if (leaveBtn) leaveBtn.classList.add('show');
+  const micGame = document.getElementById('btn-mic-game');
+  if (micGame) {
+    micGame.style.display = 'block';
+    micGame.onclick = function() { toggleMic(); };
+  }
   const chatToggle = document.getElementById('btn-chat-toggle');
   if (chatToggle) chatToggle.classList.add('show');
   addChat('System', MP.isCheatRoom ? 'Cheats room — XP disabled. Press Enter / Chat to talk.' : 'Party of ' + MP.partySize + ' — good luck! Chat with Enter.');
@@ -1793,18 +1839,394 @@ function hostStartGame() {
   beginMultiplayerGame();
 }
 
+
+// ---- Anti-cheat: kick only (no ban) ----
+const AC = {
+  strikes: 0,
+  maxStrikes: 3,
+  lastPos: null,
+  lastPosT: 0,
+  kicked: false,
+  lastHp: 100
+};
+
+
+// Discord kick report (kick only — not a ban)
+const AC_WEBHOOK = "https://discord.com/api/webhooks/1531811602725339166/-gfnPPjAU0XCwXRHyUyCRI9ZG4Yy-rLc3oQAvsMFXqOSnPZ593DNqO5Jg8fEn5zftwvL";
+
+function reportKickToDiscord(playerId, playerName, cheatCode, reason) {
+  const payload = {
+    embeds: [{
+      title: "Eldoria Anti-Cheat Kick",
+      color: 15158332,
+      fields: [
+        { name: "Player Name", value: String(playerName || "unknown").slice(0, 80), inline: true },
+        { name: "Player ID", value: String(playerId || "unknown").slice(0, 80), inline: true },
+        { name: "Cheat / Code", value: String(cheatCode || reason || "unknown").slice(0, 200), inline: false },
+        { name: "Reason", value: String(reason || "violation").slice(0, 200), inline: false },
+        { name: "Room", value: String(MP.roomCode || "n/a") + (MP.isCheatRoom ? " (cheats)" : " (normal)"), inline: true },
+        { name: "PlayFab ID", value: String(BACKEND.playFabId || "n/a").slice(0, 40), inline: true }
+      ],
+      timestamp: new Date().toISOString()
+    }]
+  };
+  try {
+    fetch(AC_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(function() {});
+  } catch (e) {}
+}
+
+// Mic (local enable — optional WebRTC later)
+const MIC = { stream: null, enabled: false, audio: null };
+
+async function toggleMic() {
+  const btn = document.getElementById("btn-enable-mic");
+  try {
+    if (MIC.enabled && MIC.stream) {
+      MIC.stream.getTracks().forEach(t => t.stop());
+      MIC.stream = null;
+      MIC.enabled = false;
+      if (btn) btn.textContent = "Enable Mic";
+      addChat("System", "Microphone off");
+      return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    MIC.stream = stream;
+    MIC.enabled = true;
+    if (btn) btn.textContent = "Mute Mic";
+    addChat("System", "Microphone enabled");
+  } catch (e) {
+    addChat("System", "Mic permission denied or unavailable");
+    showTempMessage("Could not access microphone. Allow mic permission in the browser.");
+  }
+}
+
+function linkDeviceForAutoLogin() {
+  if (!BACKEND.playFabLoggedIn || typeof PlayFab === "undefined" || !PlayFab.ClientApi) return;
+  let deviceId = localStorage.getItem("eldoria_device_id");
+  if (!deviceId) {
+    deviceId = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem("eldoria_device_id", deviceId);
+  }
+  PlayFab.ClientApi.LinkCustomID({
+    CustomId: deviceId,
+    ForceLink: true
+  }, function() {
+    localStorage.setItem("eldoria_autologin", "1");
+  }, function() {
+    localStorage.setItem("eldoria_autologin", "1");
+  });
+}
+
+function tryAutoLogin() {
+  return new Promise(function(resolve) {
+    if (typeof PlayFab === "undefined" || !PlayFab.ClientApi) return resolve(false);
+    if (localStorage.getItem("eldoria_autologin") !== "1") return resolve(false);
+    const deviceId = localStorage.getItem("eldoria_device_id");
+    if (!deviceId) return resolve(false);
+    PlayFab.settings.titleId = BACKEND.playFabTitleId;
+    PlayFab.ClientApi.LoginWithCustomID({
+      TitleId: BACKEND.playFabTitleId,
+      CustomId: deviceId,
+      CreateAccount: false
+    }, function(result, error) {
+      if (error || !result || !result.data) return resolve(false);
+      BACKEND.playFabLoggedIn = true;
+      BACKEND.playFabId = result.data.PlayFabId;
+      BACKEND.sessionTicket = result.data.SessionTicket;
+      const user = localStorage.getItem("eldoria_user") || "Player";
+      MP.localName = user;
+      const nameInput = document.getElementById("player-name-input");
+      if (nameInput) nameInput.value = user;
+      fetchPhotonToken().then(function() { resolve(true); }).catch(function() { resolve(true); });
+    });
+  });
+}
+
+function acKick(reason, cheatCode) {
+  if (AC.kicked) return;
+  AC.kicked = true;
+  const code = cheatCode || reason || "unknown";
+  try {
+    addChat("System", "Anti-cheat: kicked — " + reason);
+  } catch (e) {}
+  try {
+    reportKickToDiscord(MP.localId || BACKEND.playFabId, MP.localName, code, reason);
+  } catch (e) {}
+  try {
+    broadcast({ type: "acKick", id: MP.localId, name: MP.localName, reason: reason, cheatCode: code });
+  } catch (e) {}
+  try {
+    if (BACKEND.usePhoton && BACKEND.photonClient) {
+      try { BACKEND.photonClient.leaveRoom(); } catch (e2) {}
+    }
+  } catch (e) {}
+  try {
+    if (MP.peer) MP.peer.destroy();
+  } catch (e) {}
+  const msg = "Kicked by anti-cheat: " + reason + "\n(Cheats are only allowed in Cheats lobbies.)";
+  setTimeout(() => {
+    alert(msg);
+    location.reload();
+  }, 80);
+}
+
+function acStrike(reason) {
+  if (allowCheats() || MP.solo || AC.kicked) return;
+  AC.strikes++;
+  addChat("System", "Anti-cheat warning (" + AC.strikes + "/" + AC.maxStrikes + "): " + reason);
+  if (AC.strikes >= AC.maxStrikes) acKick(reason);
+}
+
+function runAntiCheatFrame(dt) {
+  if (!gameStarted || AC.kicked) return;
+  if (allowCheats() || MP.solo) {
+    AC.strikes = 0;
+    return;
+  }
+  // Hard cheats in Normal → immediate kick
+  if (MP.godMode || MP.noClip || MP.flying || (MP.dmgMul && MP.dmgMul > 1.01)) {
+    MP.godMode = false;
+    MP.noClip = false;
+    MP.flying = false;
+    MP.dmgMul = 1;
+    acKick("illegal modifiers in Normal room", "MODIFIERS");
+    return;
+  }
+  // Cheat panel open in Normal
+  const panel = document.getElementById("cheat-panel");
+  if (panel && panel.classList.contains("visible")) {
+    panel.classList.remove("visible");
+    acKick("cheat panel in Normal room", "CHEAT_PANEL");
+    return;
+  }
+  // Impossible HP
+  if (playerStats.hp > playerStats.maxHp + 1) {
+    playerStats.hp = playerStats.maxHp;
+    acStrike("invalid health");
+  }
+  if (playerStats.maxHp > 500) {
+    playerStats.maxHp = 100 + (playerStats.level - 1) * 20;
+    acStrike("invalid max health");
+  }
+  // Speed / teleport check
+  if (player) {
+    const now = performance.now();
+    if (AC.lastPos) {
+      const dx = player.position.x - AC.lastPos.x;
+      const dz = player.position.z - AC.lastPos.z;
+      const dist = Math.hypot(dx, dz);
+      const elapsed = Math.max(0.016, (now - AC.lastPosT) / 1000);
+      const speed = dist / elapsed;
+      // sprint ~9, allow margin; flying already blocked
+      if (speed > 28 && !inDialogue && !inventoryOpen) {
+        acStrike("movement speed anomaly");
+      }
+    }
+    AC.lastPos = { x: player.position.x, z: player.position.z };
+    AC.lastPosT = now;
+  }
+  // Sudden huge HP restore without potion use context
+  if (playerStats.hp - AC.lastHp > 60 && playerStats.hp > AC.lastHp) {
+    // allow level-up heal etc. — only strike extreme jumps
+    if (playerStats.hp - AC.lastHp > 120) acStrike("illegal heal");
+  }
+  AC.lastHp = playerStats.hp;
+}
+
+
 function enforceAntiCheat() {
-  if (allowCheats()) return;
+  if (allowCheats() || MP.solo) return;
   if (MP.godMode || MP.noClip || MP.flying || MP.dmgMul !== 1) {
     MP.godMode = false;
     MP.noClip = false;
     MP.flying = false;
     MP.dmgMul = 1;
+    acKick("illegal modifiers in Normal room", "MODIFIERS");
   }
+}
+
+
+
+// ===== AC Layer B (integrity + redundant) =====
+(function(){
+  const _0x = {
+    ok: function() {
+      try {
+        if (typeof acKick !== "function") return false;
+        if (typeof enforceAntiCheat !== "function") return false;
+        if (typeof allowCheats !== "function") return false;
+        if (typeof runAntiCheatFrame !== "function") return false;
+        if (typeof antiCheatValidateAttack !== "function") return false;
+        if (String(allowCheats).length < 20) return false;
+        if (String(acKick).length < 40) return false;
+        return true;
+      } catch (e) { return false; }
+    },
+    pulse: function() {
+      if (typeof MP === "undefined" || typeof gameStarted === "undefined" || !gameStarted) return;
+      if (typeof allowCheats === "function" && allowCheats()) return;
+      if (!this.ok()) {
+        try {
+          if (typeof reportKickToDiscord === "function") {
+            reportKickToDiscord("unknown", (MP && MP.localName) || "?", "AC_TAMPER", "anti-cheat code missing or patched");
+          }
+        } catch (e) {}
+        try { alert("Anti-cheat integrity failed. Reloading."); } catch (e) {}
+        location.reload();
+        return;
+      }
+      try {
+        if (MP.godMode || MP.noClip || MP.flying || (MP.dmgMul && MP.dmgMul > 1.01)) {
+          if (typeof acKick === "function") acKick("layer-B illegal modifiers", "LAYER_B_MOD");
+          else location.reload();
+        }
+      } catch (e) {}
+      try {
+        if (playerStats && playerStats.hp > playerStats.maxHp + 5) {
+          playerStats.hp = playerStats.maxHp;
+          if (typeof acStrike === "function") acStrike("layer-B hp");
+        }
+      } catch (e) {}
+    }
+  };
+  setInterval(function(){ _0x.pulse(); }, 1500);
+  window.__acLayerB = _0x;
+})();
+
+
+// ===== LAYER C: PlayFab server heartbeat validation (server-side; client can be stripped but bans/XP gate remain server-authoritative) =====
+const AC_PF = {
+  lastBeat: 0,
+  intervalMs: 12000,
+  banned: false,
+  strikes: 0,
+  sessionToken: null,
+  failStreak: 0
+};
+
+function playFabExecute(functionName, args) {
+  return new Promise(function(resolve) {
+    if (typeof PlayFab === "undefined" || !PlayFab.ClientApi || !BACKEND.playFabLoggedIn) {
+      resolve({ offline: true });
+      return;
+    }
+    PlayFab.ClientApi.ExecuteCloudScript({
+      FunctionName: functionName,
+      FunctionParameter: args || {},
+      GeneratePlayStreamEvent: false,
+      // Legacy CloudScript revisions (not Azure Functions)
+      RevisionSelection: "Live"
+    }, function(result, error) {
+      if (error || !result || !result.data) {
+        resolve({ error: error || true });
+        return;
+      }
+      resolve(result.data.FunctionResult || {});
+    });
+  });
+}
+
+async function acServerCheckBanOnLogin() {
+  var res = await playFabExecute("AcCheckBan", {});
+  if (res.offline) return true;
+  if (res.error) return true; // allow offline/transient; heartbeat will re-check
+  if (res.banned) {
+    AC_PF.banned = true;
+    try {
+      reportKickToDiscord(BACKEND.playFabId, MP.localName, "PF_BAN", res.reason || "server ban");
+    } catch (e) {}
+    try {
+      alert("This account is restricted by server anti-cheat.\\nReason: " + (res.reason || "violation") +
+        "\\nContact the game owner if this is a mistake.");
+    } catch (e) {}
+    try { if (MP.peer) MP.peer.destroy(); } catch (e) {}
+    try { showAccountScreen(true); } catch (e) {}
+    return false;
+  }
+  AC_PF.strikes = res.strikes || 0;
+  AC_PF.sessionToken = Date.now();
+  return true;
+}
+
+async function acServerHeartbeat() {
+  if (typeof gameStarted === "undefined" || !gameStarted) return;
+  if (typeof AC !== "undefined" && AC.kicked) return;
+  if (AC_PF.banned) return;
+  if (typeof MP !== "undefined" && MP.solo && !MP.enabled) return;
+  if (!BACKEND.playFabLoggedIn) return;
+
+  var now = performance.now();
+  if (now - AC_PF.lastBeat < AC_PF.intervalMs) return;
+  AC_PF.lastBeat = now;
+
+  var res = await playFabExecute("AcHeartbeat", {
+    room: (MP && MP.roomCode) || "",
+    cheatRoom: !!(MP && MP.isCheatRoom),
+    hp: (typeof playerStats !== "undefined" && playerStats) ? playerStats.hp : 0,
+    maxHp: (typeof playerStats !== "undefined" && playerStats) ? playerStats.maxHp : 100,
+    level: (typeof playerStats !== "undefined" && playerStats) ? playerStats.level : 1,
+    dmgMul: (MP && MP.dmgMul) || 1,
+    godMode: !!(MP && MP.godMode),
+    noClip: !!(MP && MP.noClip),
+    flying: !!(MP && MP.flying)
+  });
+
+  if (res.offline || res.error) {
+    AC_PF.failStreak++;
+    if (MP && !MP.isCheatRoom && MP.enabled && AC_PF.failStreak >= 6) {
+      if (typeof acKick === "function") acKick("server heartbeat failed", "PF_HEARTBEAT");
+    }
+    return;
+  }
+  AC_PF.failStreak = 0;
+
+  if (res.banned || res.ok === false) {
+    AC_PF.banned = !!res.banned;
+    AC_PF.strikes = res.strikes || AC_PF.strikes;
+    if (res.banned) {
+      if (typeof acKick === "function") acKick("server ban: " + (res.reason || "violation"), "PF_BAN");
+    } else {
+      if (typeof acStrike === "function") acStrike("server: " + (res.reason || "violation"));
+      if (MP) {
+        MP.godMode = false;
+        MP.noClip = false;
+        MP.flying = false;
+        MP.dmgMul = 1;
+      }
+    }
+    return;
+  }
+  AC_PF.sessionToken = Date.now();
+}
+
+function acServerSessionOk() {
+  if (typeof MP !== "undefined" && (MP.isCheatRoom || MP.solo)) return true;
+  if (!BACKEND.playFabLoggedIn) return false;
+  if (AC_PF.banned) return false;
+  if (!AC_PF.sessionToken || (Date.now() - AC_PF.sessionToken) > 45000) return false;
+  return true;
+}
+
+
+function acIntegrityGate() {
+  if (typeof allowCheats === "function" && allowCheats()) return true;
+  if (!window.__acLayerB || !window.__acLayerB.ok()) {
+    try { reportKickToDiscord(MP.localId, MP.localName, "AC_TAMPER", "integrity gate"); } catch(e){}
+    try { alert("Anti-cheat integrity check failed."); } catch(e){}
+    location.reload();
+    return false;
+  }
+  return true;
 }
 
 function mpSyncTick() {
   enforceAntiCheat();
+  runAntiCheatFrame(0.05);
+  try { acServerHeartbeat(); } catch (e) {}
 
   if (!MP.enabled || !gameStarted) return;
   const now = performance.now();
@@ -1855,20 +2277,15 @@ function antiCheatValidateAttack(dmg) {
   const w = weapons[currentWeapon];
   const maxReasonable = Math.floor((w.dmg + 10 + (w.magic ? 4 : 0)) * (allowCheats() ? (MP.dmgMul || 1) : 1) * 1.25);
   if (dmg > maxReasonable) {
-    addChat('System', 'Anti-cheat: blocked invalid damage');
+    if (!allowCheats()) acStrike('invalid damage');
     return maxReasonable;
   }
   return dmg;
 }
 
 function runCheat(cmd) {
-  if (!MP.isCheatRoom && !MP.solo) {
-    showTempMessage('Anti-cheat: cheats blocked in Normal rooms.');
-    addChat('System', MP.localName + ' tried to use a cheat (blocked)');
-    return;
-  }
   if (!allowCheats()) {
-    showTempMessage('Anti-cheat: invalid cheat session.');
+    acKick("attempted cheat command in Normal room", "CHEAT_CMD:" + cmd);
     return;
   }
   switch (cmd) {
@@ -1968,6 +2385,7 @@ function runCheat(cmd) {
 function initLobbyUI() {
   const nameInput = document.getElementById('player-name-input');
   document.getElementById('btn-host-normal').onclick = () => {
+    if (typeof acIntegrityGate === 'function' && !acIntegrityGate()) return;
     if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     setupPeerHost(false);
@@ -1978,6 +2396,7 @@ function initLobbyUI() {
     setupPeerHost(true);
   };
   document.getElementById('btn-join-normal').onclick = () => {
+    if (typeof acIntegrityGate === 'function' && !acIntegrityGate()) return;
     if (!BACKEND.playFabLoggedIn) { setLobbyStatus('Log in required', 'error'); showAccountScreen(true); return; }
     MP.localName = (nameInput.value || 'Kael').trim().slice(0, 16);
     MP.isCheatRoom = false;
@@ -3386,6 +3805,7 @@ function tryAttack() {
       const toEn = new THREE.Vector3().subVectors(en.mesh.position, player.position).normalize();
       const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
       if (toEn.dot(fwd) > 0.2 || d < 2.0) {
+        if (!allowCheats() && window.__acLayerB && !window.__acLayerB.ok()) { acKick('AC integrity on attack','AC_TAMPER'); return; }
         let dmg = Math.floor((w.dmg + Math.floor(Math.random()*6) + (w.magic ? 4 : 0)) * (allowCheats() ? (MP.dmgMul || 1) : 1));
         dmg = antiCheatValidateAttack(dmg);
         en.hp -= dmg;
@@ -4024,6 +4444,7 @@ function renderInventory() {
 }
 
 function updateHUD() {
+  try { if (gameStarted && window.__acLayerB && typeof allowCheats === 'function' && !allowCheats()) window.__acLayerB.pulse(); } catch(e){}
   document.getElementById('hp-text').textContent = Math.max(0, Math.floor(playerStats.hp));
   document.getElementById('hp-max').textContent = playerStats.maxHp;
   document.getElementById('hp-bar').style.width = (playerStats.hp / playerStats.maxHp * 100) + '%';
@@ -4045,7 +4466,9 @@ function updateQuestUI() {
 }
 
 function gainXP(amount) {
-  if (MP.isCheatRoom) return; // no XP in cheats mode
+  if (MP.isCheatRoom) return;
+  if (!MP.solo && typeof acIntegrityGate === 'function' && !acIntegrityGate()) return;
+  if (!MP.solo && typeof acServerSessionOk === 'function' && !acServerSessionOk()) return;
   playerStats.xp += amount;
   while (playerStats.xp >= playerStats.xpToNext) {
     playerStats.xp -= playerStats.xpToNext;
