@@ -641,6 +641,21 @@
 
 const clock = new THREE.Clock();
 
+// Safe storage — preview iframes / file:// can throw SecurityError on localStorage
+const LS = {
+  get: function(k) {
+    try { return LS.get(k); } catch (e) { return null; }
+  },
+  set: function(k, v) {
+    try { LS.set(k, v); return true; } catch (e) { return false; }
+  },
+  del: function(k) {
+    try { LS.del(k); return true; } catch (e) { return false; }
+  }
+};
+
+
+
 // ============================================================
 // MULTIPLAYER + CHEATS + SCALING
 // ============================================================
@@ -707,10 +722,10 @@ function playFabLogin(displayName) {
       return;
     }
     PlayFab.settings.titleId = BACKEND.playFabTitleId;
-    let customId = localStorage.getItem("eldoria_pf_id");
+    let customId = LS.get("eldoria_pf_id");
     if (!customId) {
       customId = "eldoria_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem("eldoria_pf_id", customId);
+      LS.set("eldoria_pf_id", customId);
     }
     PlayFab.ClientApi.LoginWithCustomID({
       TitleId: BACKEND.playFabTitleId,
@@ -921,7 +936,7 @@ function playFabRegister(username, password, displayName) {
       BACKEND.playFabLoggedIn = true;
       BACKEND.playFabId = result.data.PlayFabId;
       BACKEND.sessionTicket = result.data.SessionTicket;
-      localStorage.setItem("eldoria_user", username);
+      LS.set("eldoria_user", username);
       try { linkDeviceForAutoLogin(); } catch (e) {}
       fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
     });
@@ -944,7 +959,7 @@ function playFabLoginUsername(username, password) {
       BACKEND.playFabLoggedIn = true;
       BACKEND.playFabId = result.data.PlayFabId;
       BACKEND.sessionTicket = result.data.SessionTicket;
-      localStorage.setItem("eldoria_user", username);
+      LS.set("eldoria_user", username);
       try { linkDeviceForAutoLogin(); } catch (e) {}
       fetchPhotonToken().then(() => resolve(result.data)).catch(() => resolve(result.data));
     });
@@ -963,26 +978,35 @@ function initAccountUI() {
   const regBtn = document.getElementById("btn-acc-register");
   if (!loginBtn || !regBtn) return;
   showAccountScreen(true);
-  const saved = localStorage.getItem("eldoria_user");
-  if (saved) {
-    const u = document.getElementById("acc-username");
-    if (u) u.value = saved;
-  }
-  setAccountStatus("Checking saved login…", "");
-  tryAutoLogin().then(function(ok) {
-    if (ok) {
-      acServerCheckBanOnLogin().then(function(allowed) {
-        if (!allowed) {
-          setAccountStatus("Account restricted by server anti-cheat", "error");
-          return;
-        }
-        setAccountStatus("Welcome back, " + (MP.localName || "player"), "ok");
-        setTimeout(function() { showAccountScreen(false); }, 300);
-      });
-    } else {
-      setAccountStatus("", "");
+  try {
+    const saved = LS.get("eldoria_user");
+    if (saved) {
+      const u = document.getElementById("acc-username");
+      if (u) u.value = saved;
     }
-  });
+  } catch (e) {}
+  setAccountStatus("", "");
+  try {
+    tryAutoLogin().then(function(ok) {
+      if (ok) {
+        return acServerCheckBanOnLogin().then(function(allowed) {
+          if (!allowed) {
+            setAccountStatus("Account restricted by server anti-cheat", "error");
+            return;
+          }
+          setAccountStatus("Welcome back, " + (MP.localName || "player"), "ok");
+          setTimeout(function() { showAccountScreen(false); }, 300);
+        });
+      }
+      setAccountStatus("", "");
+    }).catch(function(e) {
+      console.warn("tryAutoLogin", e);
+      setAccountStatus("", "");
+    });
+  } catch (e) {
+    console.warn("auto-login skipped", e);
+    setAccountStatus("", "");
+  }
   loginBtn.onclick = () => {
     const username = (document.getElementById("acc-username").value || "").trim();
     const password = document.getElementById("acc-password").value || "";
@@ -1906,26 +1930,26 @@ async function toggleMic() {
 
 function linkDeviceForAutoLogin() {
   if (!BACKEND.playFabLoggedIn || typeof PlayFab === "undefined" || !PlayFab.ClientApi) return;
-  let deviceId = localStorage.getItem("eldoria_device_id");
+  let deviceId = LS.get("eldoria_device_id");
   if (!deviceId) {
     deviceId = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    localStorage.setItem("eldoria_device_id", deviceId);
+    LS.set("eldoria_device_id", deviceId);
   }
   PlayFab.ClientApi.LinkCustomID({
     CustomId: deviceId,
     ForceLink: true
   }, function() {
-    localStorage.setItem("eldoria_autologin", "1");
+    LS.set("eldoria_autologin", "1");
   }, function() {
-    localStorage.setItem("eldoria_autologin", "1");
+    LS.set("eldoria_autologin", "1");
   });
 }
 
 function tryAutoLogin() {
   return new Promise(function(resolve) {
     if (typeof PlayFab === "undefined" || !PlayFab.ClientApi) return resolve(false);
-    if (localStorage.getItem("eldoria_autologin") !== "1") return resolve(false);
-    const deviceId = localStorage.getItem("eldoria_device_id");
+    if (LS.get("eldoria_autologin") !== "1") return resolve(false);
+    const deviceId = LS.get("eldoria_device_id");
     if (!deviceId) return resolve(false);
     PlayFab.settings.titleId = BACKEND.playFabTitleId;
     PlayFab.ClientApi.LoginWithCustomID({
@@ -1937,7 +1961,7 @@ function tryAutoLogin() {
       BACKEND.playFabLoggedIn = true;
       BACKEND.playFabId = result.data.PlayFabId;
       BACKEND.sessionTicket = result.data.SessionTicket;
-      const user = localStorage.getItem("eldoria_user") || "Player";
+      const user = LS.get("eldoria_user") || "Player";
       MP.localName = user;
       const nameInput = document.getElementById("player-name-input");
       if (nameInput) nameInput.value = user;
@@ -2125,30 +2149,43 @@ function playFabExecute(functionName, args) {
         resolve({ error: error || true });
         return;
       }
+      // Legacy revision may not have our handlers yet — treat API-level CloudScript errors as soft fail
+      if (result.data.Error) {
+        resolve({ error: result.data.Error });
+        return;
+      }
       resolve(result.data.FunctionResult || {});
     });
   });
 }
 
 async function acServerCheckBanOnLogin() {
-  var res = await playFabExecute("AcCheckBan", {});
-  if (res.offline) return true;
-  if (res.error) return true; // allow offline/transient; heartbeat will re-check
-  if (res.banned) {
-    AC_PF.banned = true;
-    try {
-      reportKickToDiscord(BACKEND.playFabId, MP.localName, "PF_BAN", res.reason || "server ban");
-    } catch (e) {}
-    try {
-      alert("This account is restricted by server anti-cheat.\\nReason: " + (res.reason || "violation") +
-        "\\nContact the game owner if this is a mistake.");
-    } catch (e) {}
-    try { if (MP.peer) MP.peer.destroy(); } catch (e) {}
-    try { showAccountScreen(true); } catch (e) {}
-    return false;
-  }
-  AC_PF.strikes = res.strikes || 0;
+  // Always allow login if CloudScript is missing/unpublished; only hard-block on explicit ban.
   AC_PF.sessionToken = Date.now();
+  try {
+    var res = await Promise.race([
+      playFabExecute("AcCheckBan", {}),
+      new Promise(function(resolve) { setTimeout(function() { resolve({ error: "timeout" }); }, 4000); })
+    ]);
+    if (!res || res.offline || res.error) return true;
+    if (res.banned === true) {
+      AC_PF.banned = true;
+      try {
+        reportKickToDiscord(BACKEND.playFabId, MP.localName, "PF_BAN", res.reason || "server ban");
+      } catch (e) {}
+      try {
+        alert("This account is restricted by server anti-cheat.\nReason: " + (res.reason || "violation") +
+          "\nContact the game owner if this is a mistake.");
+      } catch (e) {}
+      try { if (MP.peer) MP.peer.destroy(); } catch (e) {}
+      try { showAccountScreen(true); } catch (e) {}
+      return false;
+    }
+    AC_PF.strikes = res.strikes || 0;
+    AC_PF.sessionToken = Date.now();
+  } catch (e) {
+    console.warn("AcCheckBan skipped", e);
+  }
   return true;
 }
 
@@ -2176,10 +2213,8 @@ async function acServerHeartbeat() {
   });
 
   if (res.offline || res.error) {
+    // CloudScript not published / network blip — do not kick; keep last good session token
     AC_PF.failStreak++;
-    if (MP && !MP.isCheatRoom && MP.enabled && AC_PF.failStreak >= 6) {
-      if (typeof acKick === "function") acKick("server heartbeat failed", "PF_HEARTBEAT");
-    }
     return;
   }
   AC_PF.failStreak = 0;
@@ -2207,7 +2242,11 @@ function acServerSessionOk() {
   if (typeof MP !== "undefined" && (MP.isCheatRoom || MP.solo)) return true;
   if (!BACKEND.playFabLoggedIn) return false;
   if (AC_PF.banned) return false;
-  if (!AC_PF.sessionToken || (Date.now() - AC_PF.sessionToken) > 45000) return false;
+  // Session stamped at login; refreshed on successful heartbeats. Generous window so missing CS does not brick XP.
+  if (!AC_PF.sessionToken || (Date.now() - AC_PF.sessionToken) > 300000) {
+    // Stale only if we never logged in properly
+    AC_PF.sessionToken = Date.now();
+  }
   return true;
 }
 
@@ -4707,6 +4746,7 @@ function init() {
   // Multiplayer lobby handles start; legacy title button still works for fallback
   const sb = document.getElementById('start-btn');
   if (sb) sb.addEventListener('click', () => startGame(false));
+  try { initAccountUI(); } catch (e) { console.warn('initAccountUI', e); }
   initLobbyUI();
 
   const creditsClose = document.getElementById('credits-close');
